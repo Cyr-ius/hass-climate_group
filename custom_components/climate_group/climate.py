@@ -16,9 +16,10 @@ import voluptuous as vol
 
 from homeassistant.core import State, callback
 from homeassistant.components import climate
-from homeassistant.const import (STATE_UNKNOWN, ATTR_ENTITY_ID, ATTR_TEMPERATURE, TEMP_CELSIUS,
-                                 CONF_ENTITIES, CONF_NAME, STATE_UNAVAILABLE,
-                                 ATTR_SUPPORTED_FEATURES)
+from homeassistant.const import (TEMP_CELSIUS,
+                                ATTR_ENTITY_ID, ATTR_TEMPERATURE, ATTR_SUPPORTED_FEATURES,
+                                CONF_ENTITIES, CONF_NAME,
+                                STATE_UNAVAILABLE, STATE_UNKNOWN, STATE_ON, STATE_OFF)
 from homeassistant.helpers.event import async_track_state_change
 from homeassistant.helpers.typing import HomeAssistantType, ConfigType
 from homeassistant.components.climate import (ClimateDevice, PLATFORM_SCHEMA)
@@ -34,15 +35,14 @@ PLATFORM_SCHEMA = PLATFORM_SCHEMA.extend({
     vol.Required(CONF_ENTITIES): cv.entities_domain(climate.DOMAIN)
 })
 
-SUPPORT_FLAGS = SUPPORT_TARGET_TEMPERATURE
+SUPPORT_FLAGS = SUPPORT_PRESET_MODE
 
 
 async def async_setup_platform(hass: HomeAssistantType, config: ConfigType,
                                async_add_entities,
                                discovery_info=None) -> None:
     """Initialize climate.group platform."""
-    async_add_entities([ClimateGroup(config.get(CONF_NAME),
-                                   config[CONF_ENTITIES])])
+    async_add_entities([ClimateGroup(config.get(CONF_NAME), config[CONF_ENTITIES])])
 
 
 class ClimateGroup(ClimateDevice):
@@ -52,7 +52,6 @@ class ClimateGroup(ClimateDevice):
         """Initialize a climate group."""
         self._name = name  # type: str
         self._entity_ids = entity_ids  # type: List[str]
-
         self._min_temp = 0
         self._max_temp = 0
         self._current_temp = 0
@@ -65,6 +64,7 @@ class ClimateGroup(ClimateDevice):
         self._supported_features = 0  # type: int
         self._async_unsub_state_changed = None
         self._is_away = False
+        self._preset = None
         self._preset_modes = None
 
     async def async_added_to_hass(self) -> None:
@@ -113,6 +113,14 @@ class ClimateGroup(ClimateDevice):
         return self._mode_list
 
     @property
+    def preset_mode(self):
+        return self._preset
+
+    @property
+    def preset_modes(self):
+        return self._preset_modes
+
+    @property
     def min_temp(self):
         return self._min_temp
 
@@ -153,31 +161,21 @@ class ClimateGroup(ClimateDevice):
     async def async_set_operation_mode(self, operation_mode):
         """Forward the turn_on command to all climate in the climate group. LEGACY CALL.
         This will be used only if the hass version is old."""
-        data = {ATTR_ENTITY_ID: self._entity_ids,
-                ATTR_HVAC_MODE: operation_mode}
-
+        data = {ATTR_ENTITY_ID: self._entity_ids,ATTR_HVAC_MODE: operation_mode}
         await self.hass.services.async_call(
             climate.DOMAIN, climate.SERVICE_SET_HVAC_MODE, data, blocking=True)
         
-    @property
-    def preset_mode(self):
-        """Return the current preset mode, e.g., home, away, temp."""
-        if self._is_away:
-            return PRESET_AWAY
-        return None
-
-    @property
-    def preset_modes(self):
-        """Return a list of available preset modes."""
-        return self._preset_modes
-
     async def async_set_hvac_mode(self, hvac_mode):
         """Forward the turn_on command to all climate in the climate group."""
-        data = {ATTR_ENTITY_ID: self._entity_ids,
-                ATTR_HVAC_MODE: hvac_mode}
-
+        data = {ATTR_ENTITY_ID: self._entity_ids, ATTR_HVAC_MODE: hvac_mode}
         await self.hass.services.async_call(
-            climate.DOMAIN, climate.SERVICE_SET_HVAC_MODE, data, blocking=True)    
+            climate.DOMAIN, climate.SERVICE_SET_HVAC_MODE, data, blocking=True)
+
+    async def async_set_preset_mode(self, preset_mode):
+        """Forward the preset_mode to all climate in the climate group."""
+        data = {ATTR_ENTITY_ID: self._entity_ids, ATTR_PRESET_MODE: preset_mode }
+        await self.hass.services.async_call(
+            climate.DOMAIN, climate.SERVICE_SET_PRESET_MODE, data, blocking=True)
     
     async def async_update(self):
         """Query all members and determine the climate group state."""
@@ -187,16 +185,21 @@ class ClimateGroup(ClimateDevice):
         states = list(filter(lambda x: x is not None and 'preset_mode' in x.attributes, raw_states))
 
         heat_states = list(filter(lambda x: x.state == HVAC_MODE_HEAT, states))
-        cool_states = list(filter(lambda x: x.state == HVAC_MODE_HEAT, states))
+        cool_states = list(filter(lambda x: x.state == HVAC_MODE_COOL, states))
+        off_states = list(filter(lambda x: x.state == HVAC_MODE_OFF, states))
+        on_states = list(filter(lambda x: x.state == STATE_ON, states))
 
-        heat_actions = list(filter(lambda x: x.attributes['hvac_action'] == CURRENT_HVAC_HEAT, states))
-        cool_actions = list(filter(lambda x: x.attributes['hvac_action'] == CURRENT_HVAC_COOL, states))
-        idle_actions = list(filter(lambda x: x.attributes['hvac_action'] == CURRENT_HVAC_IDLE, states))
+        heat_actions = list(filter(lambda x: x.attributes.get('hvac_action') == CURRENT_HVAC_HEAT, states))
+        cool_actions = list(filter(lambda x: x.attributes.get('hvac_action') == CURRENT_HVAC_COOL, states))
+        idle_actions = list(filter(lambda x: x.attributes.get('hvac_action') == CURRENT_HVAC_IDLE, states))
+        off_actions = list(filter(lambda x: x.attributes.get('hvac_action') == CURRENT_HVAC_OFF, states))
 
-        preset_away_stats = list(filter(lambda x: x.attributes['preset_mode'] == PRESET_AWAY, states))
-        preset_none_stats = list(filter(lambda x: x.attributes['preset_mode'] != PRESET_AWAY, states))
+        preset_away_stats = list(filter(lambda x: x.attributes.get('preset_mode') == PRESET_AWAY, states))
+        preset_none_stats = list(filter(lambda x: x.attributes.get('preset_mode') == PRESET_NONE, states))
+        preset_comfort_stats = list(filter(lambda x: x.attributes.get('preset_mode') == PRESET_COMFORT, states))
+        preset_eco_stats = list(filter(lambda x: x.attributes.get('preset_mode') == PRESET_ECO, states))
+
         self._is_away = len(preset_away_stats) == len(states)
-
         if self._is_away:
             self._target_temp = _reduce_attribute(preset_away_stats, 'temperature')
             self._current_temp = _reduce_attribute(preset_away_stats, 'current_temperature')
@@ -207,11 +210,21 @@ class ClimateGroup(ClimateDevice):
         self._min_temp = _reduce_attribute(all_states, 'min_temp', reduce=max)
         self._max_temp = _reduce_attribute(all_states, 'max_temp', reduce=min)
 
-        self._mode = CURRENT_HVAC_OFF
+        self._mode = HVAC_MODE_OFF
         if len(heat_states):
             self._mode = HVAC_MODE_HEAT
         elif len(cool_states):
             self._mode = HVAC_MODE_COOL
+        elif len(on_states):
+            self._mode = STATE_ON
+
+        self._preset = PRESET_NONE
+        if len(preset_comfort_stats):
+            self._preset = PRESET_COMFORT
+        elif len(preset_eco_stats):
+            self._preset = PRESET_ECO
+        elif len(preset_away_stats):
+            self._preset = PRESET_AWAY
 
         self._action = CURRENT_HVAC_OFF
         if len(heat_actions):
@@ -222,8 +235,7 @@ class ClimateGroup(ClimateDevice):
             self._action = CURRENT_HVAC_IDLE
 
         self._mode_list = None
-        all_mode_lists = list(
-            _find_state_attributes(states, 'hvac_modes'))
+        all_mode_lists = list(_find_state_attributes(states, 'hvac_modes'))
         if all_mode_lists:
             # Merge all effects from all effect_lists with a union merge.
             self._mode_list = list(set().union(*all_mode_lists))
@@ -242,16 +254,6 @@ class ClimateGroup(ClimateDevice):
             self._preset_modes = set(presets)
         else:
             self._preset_modes = None
-
-    async def async_set_preset_mode(self, preset_mode: str):
-        self._is_away = preset_mode == PRESET_AWAY
-
-        """Forward the preset_mode to all climate in the climate group."""
-        data = {ATTR_ENTITY_ID: self._entity_ids,
-                ATTR_PRESET_MODE: PRESET_AWAY if self._is_away else PRESET_NONE}
-
-        await self.hass.services.async_call(
-            climate.DOMAIN, climate.SERVICE_SET_PRESET_MODE, data, blocking=True)
 
 
 def _find_state_attributes(states: List[State],
