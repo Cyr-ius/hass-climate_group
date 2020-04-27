@@ -22,7 +22,7 @@ from homeassistant.const import (TEMP_CELSIUS,
                                 STATE_UNAVAILABLE, STATE_UNKNOWN, STATE_ON, STATE_OFF)
 from homeassistant.helpers.event import async_track_state_change
 from homeassistant.helpers.typing import HomeAssistantType, ConfigType
-from homeassistant.components.climate import (ClimateDevice, PLATFORM_SCHEMA)
+from homeassistant.components.climate import (ClimateEntity, PLATFORM_SCHEMA)
 from homeassistant.components.climate.const import *
 import homeassistant.helpers.config_validation as cv
 
@@ -45,7 +45,7 @@ async def async_setup_platform(hass: HomeAssistantType, config: ConfigType,
     async_add_entities([ClimateGroup(config.get(CONF_NAME), config[CONF_ENTITIES])])
 
 
-class ClimateGroup(ClimateDevice):
+class ClimateGroup(ClimateEntity):
     """Representation of a climate group."""
 
     def __init__(self, name: str, entity_ids: List[str]) -> None:
